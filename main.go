@@ -602,16 +602,30 @@ This command wraps "go %s". Below is its help:
 	os.Setenv("GARBLE_SHARED", sharedTempDir)
 
 	if flagDebugDir != "" {
+		origDir := flagDebugDir
 		flagDebugDir, err = filepath.Abs(flagDebugDir)
 		if err != nil {
 			return nil, err
 		}
-
-		if err := os.RemoveAll(flagDebugDir); err != nil {
-			return nil, fmt.Errorf("could not empty debugdir: %v", err)
+		sentinel := filepath.Join(flagDebugDir, ".garble-debugdir")
+		if entries, err := os.ReadDir(flagDebugDir); errors.Is(err, fs.ErrNotExist) {
+		} else if err == nil && len(entries) == 0 {
+			// It's OK to delete an existing directory as long as it's empty.
+		} else if _, err := os.Lstat(sentinel); err == nil {
+			// It's OK to delete a non-empty directory which was created by an earlier
+			// invocation of `garble -debugdir`, which we know by leaving a sentinel file.
+			if err := os.RemoveAll(flagDebugDir); err != nil {
+				return nil, fmt.Errorf("could not empty debugdir: %v", err)
+			}
+		} else {
+			return nil, fmt.Errorf("debugdir %q has unknown contents; empty it first", origDir)
 		}
+
 		if err := os.MkdirAll(flagDebugDir, 0o755); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not create debugdir directory: %v", err)
+		}
+		if err := os.WriteFile(sentinel, nil, 0o666); err != nil {
+			return nil, fmt.Errorf("could not create debugdir sentinel: %v", err)
 		}
 	}
 
@@ -2326,6 +2340,7 @@ To install Go, see: https://go.dev/doc/install
 	if err := json.Unmarshal(out, &sharedCache.GoEnv); err != nil {
 		return fmt.Errorf(`cannot unmarshal from "go env -json": %w`, err)
 	}
+	sharedCache.GoCmd = filepath.Join(sharedCache.GoEnv.GOROOT, "bin", "go")
 	sharedCache.GOGARBLE = cmp.Or(os.Getenv("GOGARBLE"), "*") // we default to obfuscating everything
 	return nil
 }
